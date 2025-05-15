@@ -72,6 +72,7 @@ import {
   ProviderSession,
   QrCode,
   S3,
+  RetryConfig,
 } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException, NotFoundException } from '@exceptions';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
@@ -650,8 +651,11 @@ export class BaileysStartupService extends ChannelStartupService {
       getMessage: async (key) => (await this.getMessage(key)) as Promise<proto.IMessage>,
       ...browserOptions,
       markOnlineOnConnect: this.localSettings.alwaysOnline,
-      retryRequestDelayMs: 350,
-      maxMsgRetryCount: 4,
+      
+      // Use retry config from environment variables
+      retryRequestDelayMs: this.configService.get<RetryConfig>('RETRY').MESSAGE.DELAY_MS,
+      maxMsgRetryCount: this.configService.get<RetryConfig>('RETRY').MESSAGE.MAX_RETRIES,
+      
       fireInitQueries: true,
       connectTimeoutMs: 30_000,
       keepAliveIntervalMs: 30_000,
@@ -670,7 +674,13 @@ export class BaileysStartupService extends ChannelStartupService {
       },
       cachedGroupMetadata: this.getGroupMetadataCache,
       userDevicesCache: this.userDevicesCache,
-      transactionOpts: { maxCommitRetries: 10, delayBetweenTriesMs: 3000 },
+      
+      // Use transaction retry config from environment variables
+      transactionOpts: { 
+        maxCommitRetries: this.configService.get<RetryConfig>('RETRY').MESSAGE.MAX_COMMIT_RETRIES, 
+        delayBetweenTriesMs: this.configService.get<RetryConfig>('RETRY').MESSAGE.COMMIT_DELAY_MS 
+      },
+      
       patchMessageBeforeSending(message) {
         if (
           message.deviceSentMessage?.message?.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST
@@ -727,7 +737,6 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       this.loadChatwoot();
       this.loadSettings();
-      this.loadWebhook();
       this.loadProxy();
 
       return await this.createClient(number);

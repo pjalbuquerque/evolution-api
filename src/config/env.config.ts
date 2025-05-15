@@ -256,6 +256,22 @@ export type S3 = {
 export type CacheConf = { REDIS: CacheConfRedis; LOCAL: CacheConfLocal };
 export type Production = boolean;
 
+export type RetryConfig = {
+  MESSAGE: {
+    MAX_RETRIES: number;
+    DELAY_MS: number;
+    MAX_COMMIT_RETRIES: number;
+    COMMIT_DELAY_MS: number;
+  };
+  WEBHOOK: {
+    MAX_RETRIES: number;
+    DELAY_SECONDS: number;
+  };
+  RABBITMQ: {
+    MAX_RETRIES: number;
+  };
+};
+
 export interface Env {
   SERVER: HttpServer;
   CORS: Cors;
@@ -282,6 +298,7 @@ export interface Env {
   S3?: S3;
   AUTHENTICATION: Auth;
   PRODUCTION?: Production;
+  RETRY: RetryConfig;
 }
 
 export type Key = keyof Env;
@@ -561,6 +578,22 @@ export class ConfigService {
           KEY: process.env.AUTHENTICATION_API_KEY || 'BQYHJGJHJ',
         },
         EXPOSE_IN_FETCH_INSTANCES: process.env?.AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES === 'true',
+      },
+      PRODUCTION: process.env?.NODE_ENV === 'PROD',
+      RETRY: {
+        MESSAGE: {
+          MAX_RETRIES: Number.parseInt(process.env?.RETRY_MESSAGE_MAX_RETRIES ?? '4'),
+          DELAY_MS: Number.parseInt(process.env?.RETRY_MESSAGE_DELAY_MS ?? '350'),
+          MAX_COMMIT_RETRIES: Number.parseInt(process.env?.RETRY_MESSAGE_MAX_COMMIT_RETRIES ?? '10'),
+          COMMIT_DELAY_MS: Number.parseInt(process.env?.RETRY_MESSAGE_COMMIT_DELAY_MS ?? '3000'),
+        },
+        WEBHOOK: {
+          MAX_RETRIES: Number.parseInt(process.env?.RETRY_WEBHOOK_MAX_RETRIES ?? '10'),
+          DELAY_SECONDS: Number.parseInt(process.env?.RETRY_WEBHOOK_DELAY_SECONDS ?? '30'),
+        },
+        RABBITMQ: {
+          MAX_RETRIES: Number.parseInt(process.env?.RETRY_RABBITMQ_MAX_RETRIES ?? '3'),
+        },
       },
     };
   }

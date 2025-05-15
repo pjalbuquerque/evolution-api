@@ -2,7 +2,7 @@ import { EventDto } from '@api/integrations/event/event.dto';
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
 import { wa } from '@api/types/wa.types';
-import { configService, Log, Webhook } from '@config/env.config';
+import { configService, Log, Webhook, ConfigService, RetryConfig } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { BadRequestException } from '@exceptions';
 import axios, { AxiosInstance } from 'axios';
@@ -122,7 +122,7 @@ export class WebhookController extends EventController implements EventControlle
         } catch (error) {
           this.logger.error({
             local: `${origin}.sendData-Webhook`,
-            message: `Todas as tentativas falharam: ${error?.message}`,
+            message: `All attempts failed: ${error?.message}`,
             hostName: error?.hostname,
             syscall: error?.syscall,
             code: error?.code,
@@ -169,7 +169,7 @@ export class WebhookController extends EventController implements EventControlle
         } catch (error) {
           this.logger.error({
             local: `${origin}.sendData-Webhook-Global`,
-            message: `Todas as tentativas falharam: ${error?.message}`,
+            message: `All attempts failed: ${error?.message}`,
             hostName: error?.hostname,
             syscall: error?.syscall,
             code: error?.code,
@@ -190,18 +190,31 @@ export class WebhookController extends EventController implements EventControlle
     origin: string,
     baseURL: string,
     serverUrl: string,
-    maxRetries = 10,
-    delaySeconds = 30,
+    maxRetries?: number,
+    delaySeconds?: number,
   ): Promise<void> {
+    const retryConfig = configService.get<RetryConfig>('RETRY');
+    const webhookRetry = retryConfig.WEBHOOK;
+    
+    // Use provided values or defaults from config
+    const effectiveMaxRetries = maxRetries ?? webhookRetry.MAX_RETRIES;
+    const effectiveDelaySeconds = delaySeconds ?? webhookRetry.DELAY_SECONDS;
+    
+    // If max retries is 0, we don't retry at all (synchronous mode)
+    if (effectiveMaxRetries === 0) {
+      await httpService.post('', webhookData);
+      return;
+    }
+    
     let attempts = 0;
 
-    while (attempts < maxRetries) {
+    while (attempts < effectiveMaxRetries) {
       try {
         await httpService.post('', webhookData);
         if (attempts > 0) {
           this.logger.log({
             local: `${origin}`,
-            message: `Sucesso no envio após ${attempts + 1} tentativas`,
+            message: `Successfully sent after ${attempts + 1} attempts`,
             url: baseURL,
           });
         }
@@ -211,7 +224,7 @@ export class WebhookController extends EventController implements EventControlle
 
         this.logger.error({
           local: `${origin}`,
-          message: `Tentativa ${attempts}/${maxRetries} falhou: ${error?.message}`,
+          message: `Attempt ${attempts}/${effectiveMaxRetries} failed: ${error?.message}`,
           hostName: error?.hostname,
           syscall: error?.syscall,
           code: error?.code,
@@ -222,11 +235,11 @@ export class WebhookController extends EventController implements EventControlle
           server_url: serverUrl,
         });
 
-        if (attempts === maxRetries) {
+        if (attempts === effectiveMaxRetries) {
           throw error;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000));
+        await new Promise((resolve) => setTimeout(resolve, effectiveDelaySeconds * 1000));
       }
     }
   }

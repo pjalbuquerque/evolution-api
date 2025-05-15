@@ -1,6 +1,6 @@
 import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
-import { configService, Log, Rabbitmq } from '@config/env.config';
+import { configService, Log, Rabbitmq, RetryConfig } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import * as amqp from 'amqplib/callback_api';
 
@@ -91,6 +91,8 @@ export class RabbitmqController extends EventController implements EventControll
     const rabbitmqExchangeName = configService.get<Rabbitmq>('RABBITMQ').EXCHANGE_NAME;
     const we = event.replace(/[.-]/gm, '_').toUpperCase();
     const logEnabled = configService.get<Log>('LOG').LEVEL.includes('WEBHOOKS');
+    const retryConfig = configService.get<RetryConfig>('RETRY');
+    const maxRetries = retryConfig.RABBITMQ.MAX_RETRIES;
 
     const message = {
       event,
@@ -108,7 +110,7 @@ export class RabbitmqController extends EventController implements EventControll
 
         let retry = 0;
 
-        while (retry < 3) {
+        if (maxRetries === 0) {
           try {
             await this.amqpChannel.assertExchange(exchangeName, 'topic', {
               durable: true,
@@ -139,10 +141,57 @@ export class RabbitmqController extends EventController implements EventControll
 
               this.logger.log(logData);
             }
-
-            break;
           } catch (error) {
-            retry++;
+            this.logger.error({
+              local: `${origin}.sendData-RabbitMQ`,
+              message: `Failed to send message: ${error?.message}`,
+              error,
+            });
+          }
+        } else {
+          while (retry < maxRetries) {
+            try {
+              await this.amqpChannel.assertExchange(exchangeName, 'topic', {
+                durable: true,
+                autoDelete: false,
+              });
+
+              const eventName = event.replace(/_/g, '.').toLowerCase();
+
+              const queueName = `${instanceName}.${eventName}`;
+
+              await this.amqpChannel.assertQueue(queueName, {
+                durable: true,
+                autoDelete: false,
+                arguments: {
+                  'x-queue-type': 'quorum',
+                },
+              });
+
+              await this.amqpChannel.bindQueue(queueName, exchangeName, eventName);
+
+              await this.amqpChannel.publish(exchangeName, event, Buffer.from(JSON.stringify(message)));
+
+              if (logEnabled) {
+                const logData = {
+                  local: `${origin}.sendData-RabbitMQ`,
+                  ...message,
+                };
+
+                this.logger.log(logData);
+              }
+
+              break;
+            } catch (error) {
+              retry++;
+              if (retry === maxRetries) {
+                this.logger.error({
+                  local: `${origin}.sendData-RabbitMQ`,
+                  message: `Failed after ${maxRetries} attempts: ${error?.message}`,
+                  error,
+                });
+              }
+            }
           }
         }
       }
@@ -153,7 +202,7 @@ export class RabbitmqController extends EventController implements EventControll
 
       let retry = 0;
 
-      while (retry < 3) {
+      if (maxRetries === 0) {
         try {
           await this.amqpChannel.assertExchange(exchangeName, 'topic', {
             durable: true,
@@ -184,10 +233,57 @@ export class RabbitmqController extends EventController implements EventControll
 
             this.logger.log(logData);
           }
-
-          break;
         } catch (error) {
-          retry++;
+          this.logger.error({
+            local: `${origin}.sendData-RabbitMQ-Global`,
+            message: `Failed to send message: ${error?.message}`,
+            error,
+          });
+        }
+      } else {
+        while (retry < maxRetries) {
+          try {
+            await this.amqpChannel.assertExchange(exchangeName, 'topic', {
+              durable: true,
+              autoDelete: false,
+            });
+
+            const queueName = prefixKey
+              ? `${prefixKey}.${event.replace(/_/g, '.').toLowerCase()}`
+              : event.replace(/_/g, '.').toLowerCase();
+
+            await this.amqpChannel.assertQueue(queueName, {
+              durable: true,
+              autoDelete: false,
+              arguments: {
+                'x-queue-type': 'quorum',
+              },
+            });
+
+            await this.amqpChannel.bindQueue(queueName, exchangeName, event);
+
+            await this.amqpChannel.publish(exchangeName, event, Buffer.from(JSON.stringify(message)));
+
+            if (logEnabled) {
+              const logData = {
+                local: `${origin}.sendData-RabbitMQ-Global`,
+                ...message,
+              };
+
+              this.logger.log(logData);
+            }
+
+            break;
+          } catch (error) {
+            retry++;
+            if (retry === maxRetries) {
+              this.logger.error({
+                local: `${origin}.sendData-RabbitMQ-Global`,
+                message: `Failed after ${maxRetries} attempts: ${error?.message}`,
+                error,
+              });
+            }
+          }
         }
       }
     }
